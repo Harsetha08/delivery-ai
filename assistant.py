@@ -94,6 +94,11 @@ class MerchantSupportAssistant:
             bot = self.kb.bot_for(merchant_id, rec["order_date"])  # terms in force on the ORDER date
         except LookupError as e:
             return self._escalate(merchant_id, msg, str(e), trace)
+        keys = ["dispute_window_days"] + (["prep_sla_min", "late_grace_min", "late_penalty_pct"] if c["type"] == "late_prep" else [])
+        flagged = self.kb.flagged(merchant_id, rec["order_date"], keys)
+        if flagged:                                            # exceptions/conflicts are never applied automatically
+            k, cl, why = flagged[0]
+            return self._escalate(merchant_id, msg, f"Clause {cl} ({k}) has a condition the rules cannot apply: {why}", trace + [f"flagged: {why}"])
         svc = DeliveryContractService(None, bot); svc.log = self.preds
         res = svc.resolve_dispute(c["order_id"], msg, rec["order"])
         d = res["decision"]
@@ -117,6 +122,8 @@ class MerchantSupportAssistant:
                          question=msg, as_of=self.today, merchant_id=merchant_id, clauses=block)
         if text is None:
             text = f"Here is what your agreement says: {clauses[0]['text']} [Clause {clauses[0]['id']}]"; trace.append("LLM answer failed validation; quoted clause")
+        if any(cl in valid for _, cl, _ in self.kb.flagged(merchant_id, self.today)):
+            text += " Note: this clause has conditions, so a team member will confirm how it applies to your case."
         return {"route": "answered", "reply": text, "trace": trace + [f"clauses used: {valid}"]}
 
     def _escalate(self, merchant_id, msg, why, trace, decision=None, evidence="n/a"):
